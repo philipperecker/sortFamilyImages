@@ -16,6 +16,7 @@ import java.nio.file.attribute.FileTime;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class SortFamilyPicturesAndVideos {
 
@@ -30,8 +31,10 @@ public class SortFamilyPicturesAndVideos {
     private final String[] allowedFilmTypes = {"mov","avi","mp4"};
     private final String[] allowedPhotoTypes = {"jp(e)?g","png"};
     private final String[] allowedOtherTypes = {};
+    private final String allowedRegex = "(("+String.join(")|(", allowedFilmTypes) + ")|(" + String.join(")|(", allowedPhotoTypes)+"))";
 
     private String whatsAppFileRegex = "((IMG)|(VID))-([0-9])*-WA(.)*";
+    private String androidFileRegex = "((IMG)|(VID))_(\\d{8})_(\\d{6})\\.(.)*";
 
     private final String pathSep = "/";
     private final String typeSep = ".";
@@ -220,83 +223,99 @@ public class SortFamilyPicturesAndVideos {
         count++;
         Date d;
         print(count+": "+f.getAbsolutePath()+" (");
-        try {
+        try{
             if (isVideo(f)) {
                 print("film, capture date");
                 d = getDateVideo(f);
             } else if (isPhoto(f)) {
                 print("photo, capture date");
                 d = getDateImage(f);
-            }else{
+            } else {
                 print("other, creation date");
-                BasicFileAttributes view = Files.getFileAttributeView( f.toPath(), BasicFileAttributeView.class ).readAttributes();
-                FileTime fileTimeCreation = view.creationTime();
-                d = new Date(fileTimeCreation.toMillis());
+                BasicFileAttributes view = null;
+                try {
+                    view = Files.getFileAttributeView(f.toPath(), BasicFileAttributeView.class).readAttributes();
+                    FileTime fileTimeCreation = view.creationTime();
+                    d = new Date(fileTimeCreation.toMillis());
+                } catch (Exception e) {
+                    d = null;
+                }
             }
             if (d==null) {
                 if (f.getName().matches(whatsAppFileRegex)){
                     print("whattsapp date");
                     d = new SimpleDateFormat("yyyyMMdd").parse(f.getName().replaceAll("((IMG)|(VID))-","").replaceAll("-WA.*",""));
+                }else if(f.getName().matches(androidFileRegex)){
+                    print("android date");
+                    d = new SimpleDateFormat("yyyyMMdd_HHmmss").parse(f.getName().replaceAll("((IMG)|(VID))_","").replaceAll("\\."+allowedRegex,""));
                 }else{
                     throw new IllegalArgumentException();
                 }
             }
-        }catch (IllegalArgumentException | ImageProcessingException | IOException | ParseException | InterruptedException ignored){
-            println("no date found)");
+        }catch (Exception e){
+            println(" <no date found>)");
             return null;
         }
         println(") -> "+new SimpleDateFormat("yyyy.MM.dd HH:mm:ss").format(d));
         return d;
     }
 
-    public Date getDateImage(File image) throws ImageProcessingException, IOException, ParseException {
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss");
-        String mindate = "9999:99:99 99:99:99";
-        Date ret = null;
-        Metadata metadata = ImageMetadataReader.readMetadata(image);
-        for (Directory directory : metadata.getDirectories()) {
-            for (Tag tag : directory.getTags()) {
-                if (tag.getTagName().toLowerCase().contains("date") && (mindate.compareTo(tag.getDescription())>0)){
-                    mindate=tag.getDescription();
-                    ret=sdf.parse(mindate);
-                }
-            }
-        }
-        return ret;
-    }
-
-    public static Date getDateVideo(File f) throws IOException, ParseException, InterruptedException {
-        Date ret = null;
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        String search = "creation_time";
-
-        String line;
-        String[] arguments = new String[] {"/usr/bin/ffprobe", "-show_format", f.getAbsolutePath()};
-        Process p = new ProcessBuilder(arguments).start();
-        BufferedReader input =
-                new BufferedReader
-                        (new InputStreamReader(p.getInputStream()));
-        while ((line = input.readLine()) != null) {
-            if (line.toLowerCase().contains(search.toLowerCase())){
-                String dateString = "";
-                int index = line.length()-1;
-                for (int i = index; i >= 0; i--) {
-                    if (line.toCharArray()[i]=='=') break;
-                    if (line.toCharArray()[i]=='T')
-                        dateString = ' '+dateString;
-                    else
-                        dateString = line.toCharArray()[i]+dateString;
-                    if (line.toCharArray()[i]=='.'){
-                        dateString="";
+    public Date getDateImage(File image) {
+        try {
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss");
+            String mindate = "9999:99:99 99:99:99";
+            Date ret = null;
+            Metadata metadata = ImageMetadataReader.readMetadata(image);
+            for (Directory directory : metadata.getDirectories()) {
+                for (Tag tag : directory.getTags()) {
+                    if (tag.getTagName().toLowerCase().contains("date") && (mindate.compareTo(tag.getDescription()) > 0)) {
+                        mindate = tag.getDescription();
+                        ret = sdf.parse(mindate);
                     }
                 }
-                ret = sdf.parse(dateString);
-                break;
             }
+            return ret;
+        }catch (Exception e){
+            return null;
         }
-        p.waitFor();
-        input.close();
-        return ret;
+    }
+
+    public static Date getDateVideo(File f){
+        try{
+            Date ret = null;
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            String search = "creation_time";
+
+            String line;
+            String[] arguments = new String[] {"/usr/bin/ffprobe", "-show_format", f.getAbsolutePath()};
+            Process p = new ProcessBuilder(arguments).start();
+            BufferedReader input =
+                    new BufferedReader
+                            (new InputStreamReader(p.getInputStream()));
+            while ((line = input.readLine()) != null) {
+                if (line.toLowerCase().contains(search.toLowerCase())){
+                    String dateString = "";
+                    int index = line.length()-1;
+                    for (int i = index; i >= 0; i--) {
+                        if (line.toCharArray()[i]=='=') break;
+                        if (line.toCharArray()[i]=='T')
+                            dateString = ' '+dateString;
+                        else
+                            dateString = line.toCharArray()[i]+dateString;
+                        if (line.toCharArray()[i]=='.'){
+                            dateString="";
+                        }
+                    }
+                    ret = sdf.parse(dateString);
+                    break;
+                }
+            }
+            p.waitFor();
+            input.close();
+            return ret;
+        }catch (Exception e){
+            return null;
+        }
     }
 
 
